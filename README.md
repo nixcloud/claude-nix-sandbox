@@ -8,13 +8,13 @@ Inside the sandbox, Claude only sees the project directory you start it from. Yo
 
 ```sh
 cd ~/code/my-project
-nix run github:qknight/claude-sandbox
+nix run github:nixcloud/claude-nix-sandbox
 ```
 
 Or install it permanently:
 
 ```sh
-nix profile install github:qknight/claude-sandbox
+nix profile install github:nixcloud/claude-nix-sandbox
 cd ~/code/my-project
 claude-sandbox
 ```
