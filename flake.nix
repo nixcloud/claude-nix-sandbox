@@ -20,7 +20,7 @@
         let
           # Werkzeuge, die innerhalb der Sandbox im PATH liegen
           tools = pkgs.buildEnv {
-            name = "claude-sandbox-tools";
+            name = "claude-nix-sandbox-tools";
             paths = with pkgs; [
               claude-code
               bashInteractive
@@ -51,27 +51,89 @@
 
           caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
-          claude-sandbox = pkgs.writeShellApplication {
-            name = "claude-sandbox";
-            runtimeInputs = [ pkgs.bubblewrap pkgs.coreutils ];
+          # Git-Revision dieses Builds (leer bei lokalen, ungesicherten Änderungen)
+          rev = self.rev or "";
+
+          claude-nix-sandbox = pkgs.writeShellApplication {
+            name = "claude-nix-sandbox";
+            runtimeInputs = [ pkgs.bubblewrap pkgs.coreutils pkgs.git pkgs.jq ];
             text = ''
+              # Update-Check auf dem Host, bevor die Sandbox startet
+              # (abschalten mit CLAUDE_NIX_SANDBOX_NO_UPDATE_CHECK=1)
+              repo_url="https://github.com/nixcloud/claude-nix-sandbox"
+              flake_ref="github:nixcloud/claude-nix-sandbox"
+              installed_rev="${rev}"
+
+              update_sandbox() {
+                # Vorhandenen Profil-Eintrag aktualisieren, sonst neu installieren
+                local element
+                element="$(nix profile list --json 2>/dev/null \
+                  | jq -r --arg u "$flake_ref" \
+                      '.elements | to_entries[] | select((.value.originalUrl // "") | startswith($u)) | .key' \
+                  | head -n1 || true)"
+                if [ -n "$element" ]; then
+                  nix profile upgrade --refresh "$element"
+                else
+                  nix profile "$(profile_add_cmd)" --refresh "$flake_ref"
+                fi
+              }
+
+              # Neuere Nix-Versionen nennen "nix profile install" jetzt "nix profile add"
+              profile_add_cmd() {
+                if nix profile add --help >/dev/null 2>&1; then
+                  echo add
+                else
+                  echo install
+                fi
+              }
+
+              if [ -z "''${CLAUDE_NIX_SANDBOX_NO_UPDATE_CHECK:-}" ] && [ -n "$installed_rev" ] \
+                 && [ -t 0 ] && [ -t 1 ] && command -v nix >/dev/null; then
+                latest_rev="$(GIT_TERMINAL_PROMPT=0 timeout 3 git ls-remote "$repo_url" HEAD 2>/dev/null | cut -f1 || true)"
+                if [ -n "$latest_rev" ] && [ "$latest_rev" != "$installed_rev" ]; then
+                  echo "claude-nix-sandbox: neue Version verfügbar (''${installed_rev:0:7} → ''${latest_rev:0:7})." >&2
+                  read -r -p "Jetzt aktualisieren (nix profile $(profile_add_cmd) $flake_ref)? [y/N] " answer
+                  case "$answer" in
+                    [yYjJ]*)
+                      if update_sandbox; then
+                        # Neue Version starten, ohne erneut zu prüfen
+                        export CLAUDE_NIX_SANDBOX_NO_UPDATE_CHECK=1
+                        if new_bin="$(command -v claude-nix-sandbox)"; then
+                          exec "$new_bin" "$@"
+                        fi
+                      else
+                        echo "claude-nix-sandbox: Update fehlgeschlagen – starte die installierte Version." >&2
+                      fi
+                      ;;
+                  esac
+                fi
+              fi
+
               project="$(pwd -P)"
               home_real="$(cd "$HOME" && pwd -P)"
 
               # Schutz: niemals das Home-Verzeichnis (oder ein Elternverzeichnis davon) freigeben
               if [ "$project" = "/" ]; then
-                echo "claude-sandbox: '/' kann nicht als Projektverzeichnis verwendet werden." >&2
+                echo "claude-nix-sandbox: '/' kann nicht als Projektverzeichnis verwendet werden." >&2
                 exit 1
               fi
               case "$home_real/" in
                 "$project"/*)
-                  echo "claude-sandbox: $project ist dein Home oder enthält es – abgebrochen." >&2
+                  echo "claude-nix-sandbox: $project ist dein Home oder enthält es – abgebrochen." >&2
                   exit 1
                   ;;
               esac
 
               # Separates, persistentes Home für die Sandbox (Login, ~/.claude, Nix-Cache …)
-              sandbox_home="''${CLAUDE_SANDBOX_HOME:-''${XDG_STATE_HOME:-$HOME/.local/state}/claude-sandbox/home}"
+              state_dir="''${XDG_STATE_HOME:-$HOME/.local/state}"
+              sandbox_home="''${CLAUDE_NIX_SANDBOX_HOME:-$state_dir/claude-nix-sandbox/home}"
+
+              # Einmalige Migration vom alten Namen "claude-sandbox" (Login, Sitzungen)
+              if [ -z "''${CLAUDE_NIX_SANDBOX_HOME:-}" ] && [ ! -e "$state_dir/claude-nix-sandbox" ] \
+                 && [ -d "$state_dir/claude-sandbox" ]; then
+                mv "$state_dir/claude-sandbox" "$state_dir/claude-nix-sandbox"
+                echo "claude-nix-sandbox: Zustand von $state_dir/claude-sandbox übernommen." >&2
+              fi
               mkdir -p "$sandbox_home"
 
               bwrap_args=(
@@ -121,16 +183,28 @@
                 --setenv SSL_CERT_FILE ${caBundle}
                 --setenv NIX_SSL_CERT_FILE ${caBundle}
                 --setenv DISABLE_AUTOUPDATER 1
+
+                # Root-tmpfs schreibgeschützt machen (muss nach allen Mounts kommen):
+                # Schreibzugriffe außerhalb von Projekt, /home/sandbox und /tmp schlagen fehl
+                --remount-ro /
               )
 
               if [ -n "''${COLORTERM:-}" ]; then
                 bwrap_args+=(--setenv COLORTERM "$COLORTERM")
               fi
 
-              # "claude-sandbox --shell" öffnet eine Bash in der Sandbox (zum Testen)
+              # "claude-nix-sandbox --shell" öffnet eine Bash in der Sandbox (zum Testen)
+              # Ohne Argumente: letzte Sitzung dieses Projekts fortsetzen, falls vorhanden
+              # ("claude-nix-sandbox --new" erzwingt eine neue Sitzung)
+              session_dir="$sandbox_home/.claude/projects/''${project//[^a-zA-Z0-9]/-}"
               if [ "''${1:-}" = "--shell" ]; then
                 shift
                 cmd=(${pkgs.bashInteractive}/bin/bash "$@")
+              elif [ "''${1:-}" = "--new" ]; then
+                shift
+                cmd=(${pkgs.claude-code}/bin/claude "$@")
+              elif [ $# -eq 0 ] && compgen -G "$session_dir/*.jsonl" >/dev/null; then
+                cmd=(${pkgs.claude-code}/bin/claude --continue)
               else
                 cmd=(${pkgs.claude-code}/bin/claude "$@")
               fi
@@ -140,14 +214,14 @@
           };
         in
         {
-          inherit claude-sandbox;
-          default = claude-sandbox;
+          inherit claude-nix-sandbox;
+          default = claude-nix-sandbox;
         });
 
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";
-          program = "${self.packages.${pkgs.system}.default}/bin/claude-sandbox";
+          program = "${self.packages.${pkgs.system}.default}/bin/claude-nix-sandbox";
         };
       });
     };
