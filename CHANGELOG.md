@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Renamed the environment variables:** `CLAUDE_SANDBOX_HOME` is now `CLAUDE_NIX_SANDBOX_HOME`, and `CLAUDE_SANDBOX_NO_UPDATE_CHECK` is now `CLAUDE_NIX_SANDBOX_NO_UPDATE_CHECK`. The old names are no longer read.
 - **Moved the state directory** from `~/.local/state/claude-sandbox` to `~/.local/state/claude-nix-sandbox`. On first start, an existing old directory is moved over once, so the login and sessions are kept.
 - **Running without arguments now continues the project's most recent session** (`claude --continue`), so work picks up after a reboot or crash. If there is no previous session, a new one starts.
+- **All messages and prompts are now in English** (they were German), e.g. the update prompt now reads `new version available (…)` / `Update now (…)? [y/N]`.
 - **The README now uses `nix profile add`** as the install command. On older Nix versions, `nix profile install` still works.
 
 ### Added
@@ -21,4 +22,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Starting without arguments printed `compgen: command not found`.** The check for a previous session to continue used a Bash builtin that the launcher's Bash doesn't have, so the last session was never continued. The check now works and the error is gone.
 - **Writes outside the project directory were silently lost.** The sandbox root was a writable in-memory tmpfs, so a write to a path like `/home/you/other-dir` seemed to succeed but disappeared on exit. The root is now remounted read-only, and such writes fail with `Read-only file system`. The project, the sandbox home and `/tmp` stay writable.

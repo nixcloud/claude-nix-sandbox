@@ -102,8 +102,8 @@ git config --global user.email "you@example.com"
 Each time it starts, `claude-nix-sandbox` compares the Git revision it was built from with the latest commit on `github:nixcloud/claude-nix-sandbox`. The check runs on the host before the sandbox starts, so Claude never sees it. If a newer version exists, you are asked:
 
 ```
-claude-nix-sandbox: neue Version verfügbar (dde06bf → 1a2b3c4).
-Jetzt aktualisieren (nix profile add github:nixcloud/claude-nix-sandbox)? [y/N]
+claude-nix-sandbox: new version available (dde06bf → 1a2b3c4).
+Update now (nix profile add github:nixcloud/claude-nix-sandbox)? [y/N]
 ```
 
 If you answer `y`, the existing profile entry is upgraded with `nix profile upgrade --refresh`. Without one, it is installed with `nix profile add --refresh github:nixcloud/claude-nix-sandbox` (`nix profile install` on Nix versions without `add`). The new version then starts right away with the same arguments. Any other answer starts the installed version.
