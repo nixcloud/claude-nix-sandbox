@@ -29,6 +29,15 @@ To start a fresh session instead:
 claude-nix-sandbox --new
 ```
 
+To share more directories with the sandbox, list them after `--add`. Each one is mounted read-write at its real path, next to the current directory, and passed to Claude with `--add-dir`:
+
+```sh
+cd ~/myproject
+claude-nix-sandbox --add ~/cargo-tests ~/cargo
+```
+
+Inside the sandbox, `ls /home/you` then shows only `myproject`, `cargo-tests` and `cargo`. `--add` takes every following argument up to the next one starting with `-`, can be repeated and combined with `--new` or `--shell`. Use `--` to end the launcher options if the first argument for `claude` doesn't start with `-`, e.g. `claude-nix-sandbox --add ../lib -- "fix the tests"`.
+
 Any other arguments are passed through to `claude` unchanged. For example, `claude-nix-sandbox --resume` opens the session picker.
 
 To open a Bash shell inside the same sandbox, for debugging or one-time setup:
@@ -42,6 +51,7 @@ claude-nix-sandbox --shell
 | Path | Access |
 |---|---|
 | Current directory (`$PWD`) | read-write, mounted at its real path |
+| Directories given with `--add` | read-write, mounted at their real paths |
 | Sandbox home (`/home/sandbox`) | read-write, persistent (see below) |
 | `/nix` | read-only |
 | `/nix/var/nix/daemon-socket` | read-write, used to talk to the Nix daemon |
@@ -51,11 +61,11 @@ claude-nix-sandbox --shell
 | Network | shared, because Claude needs the API |
 | Your real `$HOME` | **not visible** |
 
-The sandbox root is remounted read-only after all mounts are set up. A write outside the project, the sandbox home or `/tmp` (for example to `/home/you/other-dir`) fails with `Read-only file system` instead of silently landing in memory and being lost on exit.
+The sandbox root is remounted read-only after all mounts are set up. A write outside the project, the `--add` directories, the sandbox home or `/tmp` (for example to `/home/you/other-dir`) fails with `Read-only file system` instead of silently landing in memory and being lost on exit.
 
 All other namespaces (PID, IPC, UTS, user and cgroup) are unshared. The environment is cleared, and `PATH` contains only a curated tool set: coreutils, git, ripgrep, fd, jq, curl, nix and similar.
 
-As a safety check, `claude-nix-sandbox` refuses to start when the current directory is `/`, your home directory, or a parent of it.
+As a safety check, `claude-nix-sandbox` refuses to start when the current directory or a directory given with `--add` is `/`, your home directory, or a parent of it.
 
 ## Using Nix inside the sandbox
 

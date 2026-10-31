@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`--add DIR...` flag** to share more directories with the sandbox, e.g. `claude-nix-sandbox --add ~/cargo-tests ~/cargo`. Each directory is mounted read-write at its real path and passed to Claude with `--add-dir`; the same safety check as for the project directory applies (no `/`, no home directory or its parents).
+- **Launcher options can now be combined** in any order, e.g. `--add ../lib --new`. Use `--` to end them before arguments meant for `claude`.
 - **`--new` flag** to start a fresh session instead of continuing the last one.
 - **Update check on every start.** The check runs on the host before the sandbox starts. If GitHub has a newer commit, it asks whether to update, then upgrades the existing profile entry or installs one (`nix profile add`, falling back to `nix profile install` on older Nix) and restarts the new version.
   - Skipped when stdin or stdout is not a terminal, when the build has no Git revision, when GitHub doesn't answer within 3 seconds, or when `CLAUDE_NIX_SANDBOX_NO_UPDATE_CHECK=1` is set.

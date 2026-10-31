@@ -109,20 +109,57 @@
                 fi
               fi
 
-              project="$(pwd -P)"
               home_real="$(cd "$HOME" && pwd -P)"
 
               # Safety: never expose the home directory (or one of its parents)
-              if [ "$project" = "/" ]; then
-                echo "claude-nix-sandbox: '/' cannot be used as the project directory." >&2
-                exit 1
-              fi
-              case "$home_real/" in
-                "$project"/*)
-                  echo "claude-nix-sandbox: $project is or contains your home directory, aborting." >&2
+              check_dir() {
+                if [ "$1" = "/" ]; then
+                  echo "claude-nix-sandbox: '/' cannot be shared with the sandbox." >&2
                   exit 1
-                  ;;
-              esac
+                fi
+                case "$home_real/" in
+                  "$1"/*)
+                    echo "claude-nix-sandbox: $1 is or contains your home directory, aborting." >&2
+                    exit 1
+                    ;;
+                esac
+              }
+
+              project="$(pwd -P)"
+              check_dir "$project"
+
+              # Launcher options; everything after them goes to claude (or bash with --shell)
+              #   --add DIR...  share more directories read-write, at their real paths
+              #   --new         start a new session instead of continuing the last one
+              #   --shell       open a Bash shell in the sandbox (for testing)
+              extra_dirs=()
+              mode="continue"
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  --add)
+                    shift
+                    if [ $# -eq 0 ] || [ "''${1#-}" != "$1" ]; then
+                      echo "claude-nix-sandbox: --add needs at least one directory." >&2
+                      exit 1
+                    fi
+                    while [ $# -gt 0 ] && [ "''${1#-}" = "$1" ]; do
+                      if ! dir="$(cd "$1" 2>/dev/null && pwd -P)"; then
+                        echo "claude-nix-sandbox: $1 is not a directory." >&2
+                        exit 1
+                      fi
+                      check_dir "$dir"
+                      if [ "$dir" != "$project" ]; then
+                        extra_dirs+=("$dir")
+                      fi
+                      shift
+                    done
+                    ;;
+                  --new) mode=new; shift ;;
+                  --shell) mode=shell; shift; break ;;
+                  --) shift; break ;;
+                  *) break ;;
+                esac
+              done
 
               # Separate, persistent home for the sandbox (login, ~/.claude, Nix cache, ...)
               state_dir="''${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -166,10 +203,8 @@
                 --dir /bin
                 --symlink ${pkgs.bashInteractive}/bin/sh /bin/sh
 
-                # Sandbox home and project
+                # Sandbox home (the project and --add directories follow below)
                 --bind "$sandbox_home" /home/sandbox
-                --bind "$project" "$project"
-                --chdir "$project"
 
                 --setenv HOME /home/sandbox
                 --setenv USER "$(id -un)"
@@ -184,8 +219,20 @@
                 --setenv NIX_SSL_CERT_FILE ${caBundle}
                 --setenv DISABLE_AUTOUPDATER 1
 
+              )
+
+              # Project and --add directories, read-write at their real paths
+              claude_args=()
+              for dir in "''${extra_dirs[@]}"; do
+                bwrap_args+=(--bind "$dir" "$dir")
+                claude_args+=(--add-dir "$dir")
+              done
+              bwrap_args+=(
+                --bind "$project" "$project"
+                --chdir "$project"
+
                 # Make the root tmpfs read-only (must come after all mounts):
-                # writes outside the project, /home/sandbox and /tmp fail
+                # writes outside the shared directories, /home/sandbox and /tmp fail
                 --remount-ro /
               )
 
@@ -193,9 +240,7 @@
                 bwrap_args+=(--setenv COLORTERM "$COLORTERM")
               fi
 
-              # "claude-nix-sandbox --shell" opens a Bash shell in the sandbox (for testing)
               # Without arguments: continue this project's last session, if there is one
-              # ("claude-nix-sandbox --new" forces a new session)
               session_dir="$sandbox_home/.claude/projects/''${project//[^a-zA-Z0-9]/-}"
               # compgen is missing from the non-interactive bash used here
               has_session() {
@@ -205,16 +250,12 @@
                 done
                 return 1
               }
-              if [ "''${1:-}" = "--shell" ]; then
-                shift
+              if [ "$mode" = shell ]; then
                 cmd=(${pkgs.bashInteractive}/bin/bash "$@")
-              elif [ "''${1:-}" = "--new" ]; then
-                shift
-                cmd=(${pkgs.claude-code}/bin/claude "$@")
-              elif [ $# -eq 0 ] && has_session; then
-                cmd=(${pkgs.claude-code}/bin/claude --continue)
+              elif [ "$mode" = continue ] && [ $# -eq 0 ] && has_session; then
+                cmd=(${pkgs.claude-code}/bin/claude "''${claude_args[@]}" --continue)
               else
-                cmd=(${pkgs.claude-code}/bin/claude "$@")
+                cmd=(${pkgs.claude-code}/bin/claude "''${claude_args[@]}" "$@")
               fi
 
               exec bwrap "''${bwrap_args[@]}" "''${cmd[@]}"
